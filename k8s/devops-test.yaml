@@ -1,0 +1,153 @@
+---
+# create namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devops-test
+
+---
+# create config map for container app to read port number
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: port-config
+  namespace: devops-test
+data:
+  SERVE_PORT: '5001'
+---
+# create service account to be attached to pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mypython-app-sa
+  namespace: devops-test
+
+---
+## create clusterRole and ClusterRoleBinding with required permissions.
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: k8s-cluster-role
+  namespace: devops-test
+rules:
+    - apiGroups:
+        - ""
+        - "apps"
+        - "batch"
+        - "extensions"
+      resources:
+        - "configmaps"
+        - "cronjobs"
+        - "deployments"
+        - "events"
+        - "ingresses"
+        - "jobs"
+        - "pods"
+        - "pods/attach"
+        - "pods/exec"
+        - "pods/log"
+        - "pods/portforward"
+        - "secrets"
+        - "services"
+      verbs:
+        - "create"
+        - "delete"
+        - "describe"
+        - "get"
+        - "list"
+        - "patch"
+        - "update"
+---
+## ClusterRoleBinding to bind new clusterRole to the newly created service account 
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: k8s-cluster-role
+  namespace: devops-test
+subjects:
+- kind: ServiceAccount
+  name: mypython-app-sa
+  namespace: devops-test
+roleRef:
+  kind: ClusterRole
+  name: k8s-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+--- 
+# create deployment with 2 replicas
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mypython-app-rest-deployment
+  namespace: devops-test
+spec: 
+  replicas: 2
+  selector:
+    matchLabels: 
+      component: mypython-app-rest
+  template:
+    metadata:
+      labels:
+        component: mypython-app-rest
+    spec: 
+      serviceAccountName: mypython-app-sa
+      containers:
+        - name: mypython-app-rest
+          image: vinaykumar6/vinay-devops-test
+          ports: 
+            - containerPort: 5001
+          env:
+            - name: SERVE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: port-config
+                  key: SERVE_PORT
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5001
+            initialDelaySeconds: 50
+            periodSeconds: 30
+---
+# Cluster IP service to direct traffic to pod using labels and selectors
+apiVersion: v1
+kind: Service
+metadata: 
+  name: mypython-app-rest-cluster-ip-service
+  namespace: devops-test
+spec:
+  type: ClusterIP
+  selector:
+    component: mypython-app-rest
+  ports:
+    - port: 5001
+      targetPort: 5001
+---
+# Ingress route to allow traffic inside the cluster 
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-service
+  namespace: devops-test
+  annotations: 
+    kubernetes.io/ingress.class: 'nginx'
+    nginx.ingress.kubernetes.io/use-regex: 'true'
+    nginx.ingress.kubernetes.io/service-upstream: 'true'
+spec: 
+  rules:
+    - http:
+       paths:
+        - path: /configs/*
+          pathType: Prefix
+          backend:  
+            service:
+              name: mypython-app-rest-cluster-ip-service
+              port: 
+                number: 5001
+        - path: /config-service/*
+          pathType: Prefix
+          backend:  
+            service:
+              name: mypython-app-rest-cluster-ip-service
+              port: 
+                number: 5001
